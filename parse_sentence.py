@@ -144,17 +144,33 @@ def main():
             print(deps)
             print("")
         return
-    # The parser prints dependencies directly; we just invoke it.
-    parse(
-        sentence=args.sentence,
-        language=args.language,
-        p=args.p,
-        LEX_k=args.lex_k,
-        project_rounds=args.rounds,
-        verbose=verbose,
-        debug=False,
-        readout_method=ReadoutMethod.FIBER_READOUT,
-    )
+    # English: use parse() to match original behavior; others use parse_dependencies().
+    if args.language.lower() == "english":
+        parse(
+            sentence=args.sentence,
+            language=args.language,
+            p=args.p,
+            LEX_k=args.lex_k,
+            project_rounds=args.rounds,
+            verbose=verbose,
+            debug=False,
+            readout_method=ReadoutMethod.FIBER_READOUT,
+        )
+    else:
+        ans = parse_dependencies(
+            sentence=args.sentence,
+            language=args.language,
+            p=args.p,
+            LEX_k=args.lex_k,
+            project_rounds=args.rounds,
+            verbose=verbose,
+            debug=False,
+            readout_method=ReadoutMethod.FIBER_READOUT,
+            minimal=False,
+        )
+        print("Dependencies (head, dependent, relation):")
+        for dep in ans:
+            print(dep)
 
 
 if __name__ == "__main__":

@@ -1415,9 +1415,8 @@ def parse_dependencies(sentence="cats chase mice", language="English", p=0.1, LE
 	sentence_tokens = sentence.split(" ")
 
 	for word in sentence_tokens:
-		lexeme = lexeme_dict.get(word)
-		if lexeme is None:
-			continue
+		# Align English/Others with parse(): require lexeme to exist, otherwise KeyError
+		lexeme = lexeme_dict[word]
 		b.activateWord(LEX, word)
 		for rule in lexeme["PRE_RULES"]:
 			b.applyRule(rule)
@@ -1484,6 +1483,9 @@ def parse_dependencies(sentence="cats chase mice", language="English", p=0.1, LE
 		classifiers = {"一", "一颗", "颗", "个"}
 		numerals = {"一", "一颗"}
 		verb_priority = ["踢", "放", "吃", "爱", "并非", "红温"]
+		# Distinguish transitive vs intransitive for fallback OBJ generation.
+		transitive_verbs = {"踢", "放", "吃", "爱"}
+		intransitive_verbs = {"红温"}
 		nouns_hint = {"球", "人类", "苹果", "桌子"}
 
 		tokens = raw_tokens if raw_tokens else sentence_tokens
@@ -1510,7 +1512,8 @@ def parse_dependencies(sentence="cats chase mice", language="English", p=0.1, LE
 				if t not in pronouns and t not in aspects and t not in classifiers and t != head:
 					obj = t
 					break
-		if obj is None:
+		# Only fallback to head-as-object for transitive heads; avoid self-loop for intransitives.
+		if obj is None and head in transitive_verbs:
 			obj = head
 
 		adjs = [(i, t) for i, t in enumerate(tokens) if t in adjectives]
@@ -1523,7 +1526,8 @@ def parse_dependencies(sentence="cats chase mice", language="English", p=0.1, LE
 		obj_idx = tokens.index(obj) if obj in tokens else -1
 
 		fallback = []
-		if head and obj:
+		# Skip generating OBJ when obj==head (intransitive or no explicit object).
+		if head and obj and obj != head:
 			fallback.append([head, obj, OBJ])
 		if head and subj:
 			fallback.append([head, subj, SUBJ])
