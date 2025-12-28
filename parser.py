@@ -31,12 +31,21 @@ def chinese_segment_with_filter(sentence, verbose=False):
 	if suggest_env:
 		for tok in suggest_env.split(","):
 			tok = tok.strip()
-			if tok:
-				try:
+			if not tok:
+				continue
+			try:
+				# Support pair-based boundary hints: "踢|球" or "踢 球"
+				if "|" in tok or " " in tok:
+					parts = [p for p in tok.replace("|", " ").split(" ") if p]
+					if len(parts) == 2:
+						jieba.suggest_freq((parts[0], parts[1]), True)
+					else:
+						jieba.suggest_freq(tok, True)
+				else:
 					jieba.suggest_freq(tok, True)
-				except Exception as e:
-					if verbose:
-						print(f"Warning: suggest_freq failed for '{tok}': {e}")
+			except Exception as e:
+				if verbose:
+					print(f"Warning: suggest_freq failed for '{tok}': {e}")
 
 	addwords_env = os.environ.get("JIEBA_ADDWORDS", "")
 	if addwords_env:
@@ -76,13 +85,41 @@ def chinese_segment_with_filter(sentence, verbose=False):
 	else:
 		tokens = list(jieba.cut(sentence, HMM=hmm))
 
-	# Filter tokens to those present in lexeme dict
-	filtered_tokens = [t for t in tokens if t in CHINESE_LEXEME_DICT]
-	if not filtered_tokens:
-		if len(tokens) == 1 and len(tokens[0]) > 1:
-			filtered_tokens = list(tokens[0])
+	# Post-process: split OOV tokens using longest-match against CHINESE_LEXEME_DICT
+	lex_keys = set(CHINESE_LEXEME_DICT.keys())
+	max_lex_len = max((len(k) for k in lex_keys), default=1)
+
+	def split_to_lexemes(s):
+		res = []
+		i = 0
+		while i < len(s):
+			matched = False
+			for L in range(min(max_lex_len, len(s) - i), 0, -1):
+				sub = s[i:i+L]
+				if sub in lex_keys:
+					res.append(sub)
+					i += L
+					matched = True
+					break
+			if not matched:
+				return None  # cannot fully cover s with known lexemes
+		return res
+
+	reconstructed = []
+	for t in tokens:
+		if t in lex_keys:
+			reconstructed.append(t)
+			continue
+		parts = split_to_lexemes(t)
+		if parts:
+			reconstructed.extend(parts)
 		else:
-			filtered_tokens = tokens
+			# drop unknown token to avoid KeyError in parse; optional: keep for verbose debug
+			if verbose:
+				print(f"Dropped unknown token (no lexeme coverage): {t}")
+
+	# Filter to known lexemes only
+	filtered_tokens = [t for t in reconstructed if t in lex_keys]
 
 	if verbose:
 		print(f"Chinese tokens: {tokens}")
@@ -598,6 +635,7 @@ CHINESE_LEXEME_DICT = {
 	"球": chinese_obj_noun(17),
 	"红温": chinese_intrans_verb(18),
 	"并非": generic_copula(19),
+	"变得": generic_copula(35),
 	"人类": chinese_obj_noun(20),
 	"愚蠢的": chinese_predicative_adj(21),
 	"聪明的": chinese_predicative_adj(22),
@@ -1482,7 +1520,8 @@ def parse_dependencies(sentence="cats chase mice", language="English", p=0.1, LE
 		adjectives = {"愚蠢的", "愚蠢", "聪明的", "硬邦邦的", "善良", "温柔", "大度"}
 		classifiers = {"一", "一颗", "颗", "个"}
 		numerals = {"一", "一颗"}
-		verb_priority = ["踢", "放", "吃", "爱", "并非", "红温"]
+		verb_priority = ["踢", "放", "吃", "爱", "并非", "变得", "红温"]
+		linking_verbs = {"变得"}
 		# Distinguish transitive vs intransitive for fallback OBJ generation.
 		transitive_verbs = {"踢", "放", "吃", "爱"}
 		intransitive_verbs = {"红温"}
@@ -1520,34 +1559,52 @@ def parse_dependencies(sentence="cats chase mice", language="English", p=0.1, LE
 		advs = [(i, t) for i, t in enumerate(tokens) if t in adverbs]
 		clfs = [(i, t) for i, t in enumerate(tokens) if t in classifiers]
 		nums = [(i, t) for i, t in enumerate(tokens) if t in numerals]
+		predicates_after_head = []
+		if head in linking_verbs and head_idx != -1:
+			for i, t in enumerate(tokens):
+				if i <= head_idx:
+					continue
+				if t in pronouns or t in aspects or t in classifiers:
+					continue
+				predicates_after_head.append(t)
 
 		head_idx = tokens.index(head) if head in tokens else head_idx
 		subj_idx = tokens.index(subj) if subj in tokens else -1
 		obj_idx = tokens.index(obj) if obj in tokens else -1
 
 		fallback = []
-		# Skip generating OBJ when obj==head (intransitive or no explicit object).
-		if head and obj and obj != head:
-			fallback.append([head, obj, OBJ])
-		if head and subj:
-			fallback.append([head, subj, SUBJ])
-		for adj_pos, adj_tok in adjs:
-			if adj_tok == head:
-				continue
-			if head_idx != -1 and adj_pos < head_idx:
-				target = subj if subj else obj if obj else head
-			else:
+		if head in linking_verbs:
+			if predicates_after_head:
+				fallback.append([head, predicates_after_head[0], OBJ])
+				for extra in predicates_after_head[1:]:
+					fallback.append([head, extra, ADJ])
+			elif head and obj and obj != head:
+				fallback.append([head, obj, OBJ])
+			if head and subj:
+				fallback.append([head, subj, SUBJ])
+		else:
+			# Skip generating OBJ when obj==head (intransitive or no explicit object).
+			if head and obj and obj != head:
+				fallback.append([head, obj, OBJ])
+			if head and subj:
+				fallback.append([head, subj, SUBJ])
+			for adj_pos, adj_tok in adjs:
+				if adj_tok == head:
+					continue
+				if head_idx != -1 and adj_pos < head_idx:
+					target = subj if subj else obj if obj else head
+				else:
+					target = obj if obj else head
+				if target:
+					fallback.append([target, adj_tok, ADJ])
+			for clf_pos, clf_tok in clfs:
 				target = obj if obj else head
-			if target:
-				fallback.append([target, adj_tok, ADJ])
-		for clf_pos, clf_tok in clfs:
-			target = obj if obj else head
-			if target:
-				fallback.append([target, clf_tok, CLASSIFIER])
-		for num_pos, num_tok in nums:
-			target = obj if obj else head
-			if target:
-				fallback.append([target, num_tok, NUM])
+				if target:
+					fallback.append([target, clf_tok, CLASSIFIER])
+			for num_pos, num_tok in nums:
+				target = obj if obj else head
+				if target:
+					fallback.append([target, num_tok, NUM])
 		if advs:
 			fallback.append([head, advs[0][1], ADVERB])
 

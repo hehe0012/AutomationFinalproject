@@ -29,6 +29,7 @@ CUSTOM_WORDS = [
     "硬邦邦的",
     "愤怒地",
     "一颗",
+    "变得",
     "善良",
     "温柔",
     "大度",
@@ -49,7 +50,7 @@ TEST_CASES = [
         ("pattern1_with_adverb", "我无可奈何地红温了"),
         ("pattern2_copula", "我并非人类"),
         ("pattern2_transitive", "我踢球"),
-        ("pattern3_adjective_predicate", "你真善良"),
+        ("pattern3_adjective_predicate", "你变得善良"),
         ("pattern4_adj_subject_copula", "愚蠢的我并非人类"),
         ("pattern4_adj_subject_transitive", "愚蠢的我踢球"),
         ("pattern5_adj_object_copula", "我并非愚蠢的人类"),
@@ -57,6 +58,7 @@ TEST_CASES = [
         ("pattern6_both_adj_copula", "聪明的我并非愚蠢的人类"),
         ("pattern6_both_adj_transitive", "愚蠢的我踢硬邦邦的球"),
         ("pattern7_full_stack", "我愤怒地踢一颗硬邦邦的球"),
+        ("pattern8_additional", "你变得善良温柔大度"),
 ]
 
 
@@ -157,6 +159,12 @@ def main():
             readout_method=ReadoutMethod.FIBER_READOUT,
         )
     else:
+        # Align single-run Chinese with dump_tests: add custom words and enforce verb-object split.
+        if args.language.lower() == "chinese":
+            for word in CUSTOM_WORDS:
+                jieba.add_word(word)
+            # Prevent jieba from merging verb-object pairs like "踢球" which would drop OBJ.
+            jieba.suggest_freq(("踢", "球"), True)
         ans = parse_dependencies(
             sentence=args.sentence,
             language=args.language,
@@ -168,6 +176,9 @@ def main():
             readout_method=ReadoutMethod.FIBER_READOUT,
             minimal=False,
         )
+        # Match dump_tests presentation: sort by relation for Chinese.
+        if args.language.lower() == "chinese":
+            ans.sort(key=lambda d: d[2])
         print("Dependencies (head, dependent, relation):")
         for dep in ans:
             print(dep)
