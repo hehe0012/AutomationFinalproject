@@ -17,6 +17,8 @@ import jieba.posseg as pseg
 import unittest
 import os
 from parser import parse, ReadoutMethod, chinese_segment_with_filter, parse_dependencies
+import parser as parser_mod
+import chinese_parser as cp
 
 # Encourage stable token boundaries for the custom phrases used in the examples.
 CUSTOM_WORDS = [
@@ -124,6 +126,50 @@ def main():
         os.environ["READOUT_MINIMAL"] = "true"
 
     if args.dump_tests:
+        # Patch parser's Chinese segmentation to use chinese_parser.tokenize_chinese
+        def _segment_chinese_via_cp(sentence, verbose=False):
+            tokens = cp.tokenize_chinese(sentence)
+            # Reuse parser's lexeme dict and longest-match split to align with grammar
+            lex_keys = set(parser_mod.CHINESE_LEXEME_DICT.keys())
+            max_lex_len = max((len(k) for k in lex_keys), default=1)
+
+            def split_to_lexemes(s):
+                res = []
+                i = 0
+                while i < len(s):
+                    matched = False
+                    for L in range(min(max_lex_len, len(s) - i), 0, -1):
+                        sub = s[i:i+L]
+                        if sub in lex_keys:
+                            res.append(sub)
+                            i += L
+                            matched = True
+                            break
+                    if not matched:
+                        return None
+                return res
+
+            reconstructed = []
+            for t in tokens:
+                if t in lex_keys:
+                    reconstructed.append(t)
+                    continue
+                parts = split_to_lexemes(t)
+                if parts:
+                    reconstructed.extend(parts)
+                else:
+                    if verbose:
+                        print(f"Dropped unknown token (no lexeme coverage): {t}")
+
+            filtered_tokens = [t for t in reconstructed if t in lex_keys]
+            if verbose:
+                print(f"Chinese tokens (cp): {tokens}")
+                if filtered_tokens != tokens:
+                    print(f"Filtered tokens (known lexemes only): {filtered_tokens}")
+            return tokens, filtered_tokens
+
+        parser_mod.chinese_segment_with_filter = _segment_chinese_via_cp
+
         for word in CUSTOM_WORDS:
             jieba.add_word(word)
         jieba.suggest_freq(("踢", "球"), True)
@@ -161,6 +207,48 @@ def main():
     else:
         # Align single-run Chinese with dump_tests: add custom words and enforce verb-object split.
         if args.language.lower() == "chinese":
+            # Patch parser's Chinese segmentation to use chinese_parser.tokenize_chinese
+            def _segment_chinese_via_cp(sentence, verbose=False):
+                tokens = cp.tokenize_chinese(sentence)
+                lex_keys = set(parser_mod.CHINESE_LEXEME_DICT.keys())
+                max_lex_len = max((len(k) for k in lex_keys), default=1)
+
+                def split_to_lexemes(s):
+                    res = []
+                    i = 0
+                    while i < len(s):
+                        matched = False
+                        for L in range(min(max_lex_len, len(s) - i), 0, -1):
+                            sub = s[i:i+L]
+                            if sub in lex_keys:
+                                res.append(sub)
+                                i += L
+                                matched = True
+                                break
+                        if not matched:
+                            return None
+                    return res
+
+                reconstructed = []
+                for t in tokens:
+                    if t in lex_keys:
+                        reconstructed.append(t)
+                        continue
+                    parts = split_to_lexemes(t)
+                    if parts:
+                        reconstructed.extend(parts)
+                    else:
+                        if verbose:
+                            print(f"Dropped unknown token (no lexeme coverage): {t}")
+
+                filtered_tokens = [t for t in reconstructed if t in lex_keys]
+                if verbose:
+                    print(f"Chinese tokens (cp): {tokens}")
+                    if filtered_tokens != tokens:
+                        print(f"Filtered tokens (known lexemes only): {filtered_tokens}")
+                return tokens, filtered_tokens
+
+            parser_mod.chinese_segment_with_filter = _segment_chinese_via_cp
             for word in CUSTOM_WORDS:
                 jieba.add_word(word)
             # Prevent jieba from merging verb-object pairs like "踢球" which would drop OBJ.
